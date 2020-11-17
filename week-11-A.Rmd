@@ -11,6 +11,7 @@ library(gt)
 library(rstanarm)
 library(tidyverse)
 library(tidymodels)
+library(skimr)
 
 # We will be using the `shaming` tibble from PPBDS.data. Check out ?shaming for
 # details. On Day 1, we will explore the data and review the basics of Bayesian
@@ -30,22 +31,79 @@ week_11 <- shaming %>%
 
 **Prompt:** Let's explore the data. You can never look at your data too much!
 
-1) How many voters got which treatments and how many voted in the 2006 primary? 
+1) How many voters got which treatments and how many voted in the 2006 primary?
+Civic Duty	38218			
+Hawthorne	38204			
+Control	191243			
+Self	38218			
+Neighbors	38201	
+
+108696 people voted in the 2006 primary 
+```{r}
+shaming %>%
+  group_by(treatment) %>%
+  summarize(num_treatment = n(), .groups = "drop") 
+
+shaming %>%
+  summarize(vote_2006 = sum(primary_06))
+```
 
 2) Explore `birth_year`. Does it make sense? If we got handed a new data set for today, would `birth_year` mean the same thing? Might we want to transform it into something different so that our model would "work" with today's data?
 
+We should consider the age of each respondent at the time of the elections. This would allow us to compare different age demographics.
+
 3) There are a bunch of voting records. What do they mean? Are they all recorded in the same way? How are they connected to each other? Do we want to use them all?
+
+The voting records record if the respondent voted in that election. They are not recorded in the same way. primary_06 is recorded as binary integers while the other records are recorded as "Yes" or "No." There is also no general election results for 2006.  
 
 4) Explore the `no_of_names` variable? How is it distributed? What does it mean? Can we use it in our modeling?
 
+no_of_names is the integer variable indicating the number of names listed on the letter if the respondent was in the "Neighbours" group. We could use this to detemine if more names on the letter, or increased social pressure, then resulted in more voting among the "Neighbors" group.
+
 5) Check out `hh_size`. What does it mean? Is the distribution sensible? Might it be a good idea to create a new variable which is more likely to capture an effect of interest? For example, I bet that that there is a big difference between living by yourself and living with other people. I bet that there is much less difference between living with 3 versus 4 people.
 
+hh_size is the size of the respondents household. Yes, the distribution is sensible. Making it into a logical may make more sense and better capture the effect of household size. 
+
 6) Are the factor levels for treatment convenient? Try a simple regression and see! How can we change them?
+Civic Duty and Neighbors have the greatest impact to is may be more convenient to simply compares these to Control 
+
+```{r}
+fit <- stan_glm(primary_06 ~ treatment,
+                data = week_11,
+                refresh = 0,
+                family = binomial())
+
+print(fit, detials = FALSE)
+
+fit2 <- stan_glm(primary_06 ~ treatment + age,
+                data = week_11_clean,
+                refresh = 0,
+                family = binomial())
+
+print(fit2, detials = FALSE)
+```
+
 
 Perform other exploratory data analysis.  What other variables are connected to voting? What other variables are suspect/concerning?
 
 7) Create a new data set, `week_11_clean`, which makes whatever corrections/improvements you think are a good idea. We will use that data set for the next two Scenes.
 
+```{r}
+week_11_clean <- week_11 %>%
+  mutate(age = 2006 - birth_year) %>%
+  mutate(primary_02 = case_when(primary_02 == "Yes" ~ 1,
+                                primary_02 == "No" ~ 0)) %>%
+  mutate(general_02 = case_when(general_02 == "Yes" ~ 1,
+                                general_02 == "No" ~ 0)) %>%
+  mutate(primary_04 = case_when(primary_04 == "Yes" ~ 1,
+                                primary_04 == "No" ~ 0)) %>%
+  mutate(general_04 = case_when(general_04 == "Yes" ~ 1,
+                                general_04 == "No" ~ 0)) %>%
+  select(!birth_year) %>%
+  mutate(hh_size = case_when(hh_size == 1 ~ 0,
+                             hh_size > 1 ~ 1)) %>%
+  select(!no_of_names)
+```
 
 
 ## Scene 2
@@ -53,18 +111,48 @@ Perform other exploratory data analysis.  What other variables are connected to 
 **Prompt:** Having cleaned up our data, we are now ready to start modeling. 
 
 * Let's be disciplined. Split up the data and only use the training data for the rest of today. 
+```{r}
+set.seed(10)
+week_11_split <- initial_split(week_11_clean, prob = 0.80)
+week_11_train <- training(week_11_split)
+week_11_test  <- testing(week_11_split)
+week_11_folds <- vfold_cv(week_11_train, v = 10)
+```
 
 * Use stan_glm() to estimate a model of `primary_06` as a function of `treatment`. Write a sentence or two interpreting the important parameters. (Hint: Try it both with and without an intercept.)
+```{r}
+week_11_fit <- stan_glm(primary_06 ~ treatment,
+                        data = week_11_train,
+                        refresh = 0, 
+                        family = binomial())
+
+print(week_11_fit, details = FALSE, digits = 5)
+
+week_11_fit2 <- stan_glm(primary_06 ~ treatment - 1,
+                        data = week_11_train,
+                        refresh = 0, 
+                        family = binomial())
+
+print(week_11_fit2, details = FALSE, digits = 5)
+```
+The Median of each treatment is median predicted effect of each treatment on our outcome, voting in the primare 2006 election. The MAD_SD is our error margin meaning the our values may be + or - the MAD_SD
 
 * Use the value of MAD_SD to discuss the magnitude/importance of various coefficients. Refer to this image, courtesy of Tyler.
 
 ```{r, echo=FALSE}
 knitr::include_graphics("simko_importance.png")
+
+# There is generally a greater MAD_SD for treatment vs. Control meaning the 
+# there is the possibility for more error in the treatment coeffeicients 
 ```
 
 * What is the causal effect?
 
+The causal effect is the difference in votes among treated and control groups. Our causal effect is negative in all cases, however our treatment was able to increase voting compared to the control groups in the 2006 primary. 
+
 * What is the meaning --- in words and mathematically --- of something like `treatmentSelf`? After all, it is not a variable in our data set . . .
+
+treatmentSelf is the effect of treatment on voting in the 2006 primary when Self is the observed treatment
 
 * Compare the model with the intercept to the one without. Are they the same? Explain.
 
